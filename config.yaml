@@ -1,7 +1,7 @@
 # BBC World Service Research Intelligence Tool — config
 
 # Your email address for the weekly digest
-digest_to: "neil.doughty@bbc.co.uk"
+digest_to: "neil.doughty@gmail.com"
 
 # RSS feeds — engineering/product blogs and trade pubs
 rss_feeds:
