@@ -9,8 +9,9 @@ needing a custom domain. To send to any address, verify a domain at resend.com/d
 import datetime
 import logging
 import os
-
-import resend
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 logger = logging.getLogger(__name__)
 
@@ -153,33 +154,34 @@ def _esc(s: str) -> str:
 # ── email sender ─────────────────────────────────────────────────────────────
 
 def _send(html: str, config: dict):
-    api_key = os.environ.get("RESEND_API_KEY")
-    if not api_key:
-        logger.warning("RESEND_API_KEY not set — writing digest to digest_output.html")
+    app_password = os.environ.get("GMAIL_APP_PASSWORD")
+    if not app_password:
+        logger.warning("GMAIL_APP_PASSWORD not set — writing digest to digest_output.html")
         with open("digest_output.html", "w") as f:
             f.write(html)
         return
 
-    resend.api_key = api_key
-
-    to_addr = config.get("digest_to", "")
+    from_addr = config.get("digest_from", "neil.doughty@gmail.com")
+    to_addr = config.get("digest_to", from_addr)
     if not to_addr:
         logger.error("digest_to not configured in config.yaml")
         return
 
     week = datetime.date.today().strftime("%-d %B %Y")
 
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"BBC World Service Research Digest — {week}"
+    msg["From"] = f"WS Research Digest <{from_addr}>"
+    msg["To"] = to_addr
+    msg.attach(MIMEText(html, "html"))
+
     try:
-        r = resend.Emails.send({
-            "from": "WS Research Digest <onboarding@resend.dev>",
-            "to": [to_addr],
-            "subject": f"BBC World Service Research Digest — {week}",
-            "html": html,
-        })
-        logger.info(f"Email sent: {r}")
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(from_addr, app_password)
+            server.sendmail(from_addr, to_addr, msg.as_string())
+        logger.info(f"Email sent to {to_addr}")
     except Exception as e:
-        logger.error(f"Resend failed: {e}")
-        # Write to file as fallback so the run isn't a total loss
+        logger.error(f"Gmail send failed: {e}")
         with open("digest_output.html", "w") as f:
             f.write(html)
         logger.info("Digest saved to digest_output.html as fallback")

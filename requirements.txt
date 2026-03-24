@@ -2,4 +2,3 @@ anthropic
 feedparser
 pyyaml
 requests
-resend
