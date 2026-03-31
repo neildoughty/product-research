@@ -64,6 +64,23 @@ def fetch_rss_articles(feeds: list) -> list:
     return articles
 
 
+_FRONTEND_LANGS = {"javascript", "typescript", "css", "html", "vue", "svelte"}
+_FRONTEND_NAME_KEYWORDS = {
+    "frontend", "front-end", "web", "app", "ui", "ux", "reader", "player",
+    "site", "dotcom", "design", "interactive", "cms", "editorial", "publish",
+    "mobile", "amp", "pwa", "component", "template", "theme",
+}
+
+
+def _is_frontend_repo(repo: dict) -> bool:
+    lang = (repo.get("language") or "").lower()
+    name = repo.get("name", "").lower()
+    desc = (repo.get("description") or "").lower()
+    if lang in _FRONTEND_LANGS:
+        return True
+    return any(kw in name or kw in desc for kw in _FRONTEND_NAME_KEYWORDS)
+
+
 def fetch_github_activity(orgs: list) -> list:
     """
     Fetch new repos (created this week) and new releases from GitHub orgs.
@@ -86,7 +103,7 @@ def fetch_github_activity(orgs: list) -> list:
             )
             if resp.status_code == 200:
                 for repo in resp.json():
-                    if repo.get("fork", False):
+                    if repo.get("fork", False) or not _is_frontend_repo(repo):
                         continue
                     created = _parse_github_date(repo.get("created_at", ""))
                     if created and created > cutoff:
@@ -126,6 +143,8 @@ def fetch_github_activity(orgs: list) -> list:
                     if release.get("draft") or release.get("prerelease"):
                         continue
                     repo_name = event.get("repo", {}).get("name", org)
+                    if not _is_frontend_repo({"name": repo_name.split("/")[-1], "description": release.get("body", "")}):
+                        continue
                     items.append({
                         "source": "github",
                         "type": "release",

@@ -29,16 +29,6 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-def keyword_match(article: dict, keywords: dict) -> bool:
-    """Check if any keyword matches and assign a rough category to the article."""
-    text = (article.get("title", "") + " " + article.get("summary", "")).lower()
-    for category, kws in keywords.items():
-        for kw in kws:
-            if kw in text:
-                article.setdefault("categories", [category])
-                return True
-    return False
-
 
 def main():
     config = load_config()
@@ -63,13 +53,8 @@ def main():
     new_github = [g for g in github_items if g.get("url") and g["url"] not in seen]
     logger.info(f"{len(new_articles)} new articles, {len(new_github)} new GitHub items after dedup")
 
-    # ── Keyword pre-filter ───────────────────────────────────────────────────
-    keywords = config.get("keywords", {})
-    keyword_matched = [a for a in new_articles if keyword_match(a, keywords)]
-    logger.info(f"{len(keyword_matched)} articles pass keyword filter")
-
-    # ── Use keyword-matched articles directly (no Claude) ───────────────────
-    processed = keyword_matched
+    # ── Cap at 30 most recent articles ───────────────────────────────────────
+    processed = sorted(new_articles, key=lambda a: a.get("published", ""), reverse=True)[:30]
     logger.info(f"{len(processed)} articles going to digest")
 
     # ── Build and send digest ─────────────────────────────────────────────────
