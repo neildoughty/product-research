@@ -18,6 +18,27 @@ logger = logging.getLogger(__name__)
 LOOKBACK_DAYS = 7
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
+# Keywords that suggest a story is about product/technology, not general news.
+# Applied only to trade/newsletter/research tier feeds.
+_PRODUCT_KEYWORDS = {
+    "launch", "launched", "release", "released", "ship", "shipped",
+    "redesign", "redesigned", "rebuild", "rebuilt",
+    "product", "feature", "platform", "tool", "app", "website", "site",
+    "subscription", "paywall", "newsletter", "membership",
+    "ai", "automation", "algorithm", "machine learning", "generative",
+    "podcast", "audio", "synthetic", "voice",
+    "engineer", "developer", "engineering", "tech", "technology",
+    "ux", "design", "interface", "experience",
+    "cms", "api", "data", "analytics",
+    "digital", "mobile", "web",
+    "chatbot", "llm", "openai", "gemini",
+}
+
+
+def _is_product_story(article: dict) -> bool:
+    text = (article.get("title", "") + " " + article.get("summary", "")).lower()
+    return any(kw in text for kw in _PRODUCT_KEYWORDS)
+
 
 def _github_headers() -> dict:
     h = {
@@ -48,7 +69,7 @@ def fetch_rss_articles(feeds: list) -> list:
                 article_url = entry.get("link", "")
                 if not article_url:
                     continue
-                articles.append({
+                article = {
                     "source": "rss",
                     "org": feed_config.get("org", ""),
                     "feed_name": feed_config.get("name", ""),
@@ -57,7 +78,11 @@ def fetch_rss_articles(feeds: list) -> list:
                     "url": article_url,
                     "summary": _extract_summary(entry),
                     "published": pub_date.isoformat() if pub_date else "",
-                })
+                }
+                # Engineering blogs: include everything.
+                # Trade/newsletter/research: only include product/tech stories.
+                if article["tier"] == "engineering" or _is_product_story(article):
+                    articles.append(article)
         except Exception as e:
             logger.warning(f"RSS fetch failed for {url}: {e}")
 
