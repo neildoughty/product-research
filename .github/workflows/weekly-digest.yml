@@ -37,7 +37,9 @@ jobs:
         run: |
           git config user.name "ws-research[bot]"
           git config user.email "ws-research[bot]@users.noreply.github.com"
-          git pull --rebase origin main
+          git fetch origin main
+          python3 scripts/merge_seen.py
+          git reset --mixed origin/main
           git add seen.json
           git diff --cached --quiet || git commit -m "chore: update seen.json [skip ci]"
           git push
