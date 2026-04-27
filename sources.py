@@ -61,7 +61,8 @@ def fetch_rss_articles(feeds: list) -> list:
     for feed_config in feeds:
         url = feed_config["url"]
         try:
-            parsed = feedparser.parse(url, request_headers={"User-Agent": "WS-Research-Bot/1.0"})
+            feed_resp = requests.get(url, timeout=10, headers={"User-Agent": "WS-Research-Bot/1.0"})
+            parsed = feedparser.parse(feed_resp.content)
             for entry in parsed.entries:
                 pub_date = _parse_feed_date(entry)
                 if pub_date and pub_date < cutoff:

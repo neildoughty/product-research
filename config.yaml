@@ -102,6 +102,50 @@ hn_domains:
   - "engineering.atspotify.com"
   - "niemanlab.org"
 
+# Words that appear in titles/summaries of articles we never want
+# Applied before the AI call to drop obvious noise cheaply
+negative_keywords:
+  # Staff/personnel (not interested in who got hired or fired)
+  - "job cut"
+  - "jobs cut"
+  - "layoff"
+  - "lay off"
+  - "redundanc"
+  - "made redundant"
+  - "appointed editor"
+  - "named editor"
+  - "named as "
+  - "appointed as "
+  - "promoted to"
+  - "steps down"
+  - "steps aside"
+  - "resigns"
+  - "obituary"
+  - "passes away"
+  - "died aged"
+  # Financial/business noise
+  - "quarterly earnings"
+  - "annual report"
+  - "financial results"
+  - "revenue fell"
+  - "revenue rose"
+  - "profit warning"
+  - "stock price"
+  - "shares fell"
+  - "shares rose"
+  # Awards/lists
+  - "award winner"
+  - "award-winning"
+  - "named in list"
+  - "top 100"
+  # Field safety / physical journalism (not product/digital)
+  - "war zone"
+  - "flak jacket"
+  - "journalist killed"
+  - "journalist arrested"
+  - "press freedom"
+  - "reporter killed"
+
 # Keywords for cheap pre-filter before calling Claude
 keywords:
   live_news:

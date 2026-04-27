@@ -28,7 +28,7 @@ jobs:
 
       - name: Run digest
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.PRODUCTRESEARCHANTHROPICKEY }}
+          GROQ_API_KEY: ${{ secrets.groqsecret }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python main.py
