@@ -29,7 +29,18 @@ logger = logging.getLogger(__name__)
 
 def load_config(path: str = "config.yaml") -> dict:
     with open(path) as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    # Merge in auto-discovered sources if they exist
+    try:
+        with open("auto_sources.yaml") as f:
+            auto = yaml.safe_load(f) or {}
+        extra = auto.get("rss_feeds", [])
+        if extra:
+            config["rss_feeds"] = config.get("rss_feeds", []) + extra
+            logger.info(f"Loaded {len(extra)} auto-discovered sources")
+    except FileNotFoundError:
+        pass
+    return config
 
 
 def _passes_negative_filter(article: dict, negative_keywords: list) -> bool:
@@ -39,7 +50,14 @@ def _passes_negative_filter(article: dict, negative_keywords: list) -> bool:
 
 def main():
     test_mode = "--test" in sys.argv
+    discover_mode = "--discover" in sys.argv
     config = load_config()
+
+    if discover_mode:
+        from discovery import run as discover
+        discover(config)
+        return
+
     negative_keywords = config.get("negative_keywords", [])
     logger.info(f"WS Research Tool starting {'[TEST MODE]' if test_mode else ''}")
 

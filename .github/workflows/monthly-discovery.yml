@@ -1,0 +1,40 @@
+name: Monthly Source Discovery
+
+on:
+  schedule:
+    # 7am UTC on the 1st of every month
+    - cron: '0 7 1 * *'
+  workflow_dispatch: # manual trigger for testing
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run source discovery
+        env:
+          GROQ_API_KEY: ${{ secrets.groqsecret }}
+        run: python main.py --discover
+
+      - name: Commit updated auto_sources.yaml
+        run: |
+          git config user.name "ws-research[bot]"
+          git config user.email "ws-research[bot]@users.noreply.github.com"
+          git add auto_sources.yaml
+          git diff --cached --quiet || git commit -m "chore: update auto_sources.yaml [skip ci]"
+          git push
