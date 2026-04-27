@@ -4,12 +4,20 @@ Monthly source discovery — finds new RSS feeds worth monitoring.
 Triggered via: python3 main.py --discover
 Runs as a separate monthly GitHub Actions job.
 
-Process:
-  1. Search HN for stories about journalism/news product from unknown domains
-  2. Try to find an RSS feed on each candidate domain
-  3. Sample recent articles from the feed
-  4. Ask Groq whether the source regularly covers digital news products or AI in journalism
-  5. Save validated sources to auto_sources.yaml (never modifies config.yaml)
+Strategy:
+  Primary — link extraction from trusted sources. If Nieman Lab, Reuters Institute,
+  CJR, GIJN, or Press Gazette keep citing a domain we don't monitor, that's a strong
+  editorial signal it's on-brief. This naturally surfaces global sources that never
+  appear on Hacker News.
+
+  Fallback — if primary finds fewer than MIN_CANDIDATES candidates, supplement with
+  an HN keyword search.
+
+Process for each candidate domain:
+  1. Try to find an RSS feed
+  2. Sample recent article titles
+  3. Ask Groq whether it's relevant to digital news products / AI in journalism
+  4. Save validated sources to auto_sources.yaml
 """
 
 import logging
@@ -26,27 +34,40 @@ logger = logging.getLogger(__name__)
 
 AUTO_SOURCES_PATH = "auto_sources.yaml"
 
-# Search terms designed to surface relevant stories from domains we don't yet know about
-_SEARCH_TERMS = [
-    "newsroom AI product",
-    "journalism technology",
-    "news engineering",
-    "media product strategy",
-    "digital news platform",
-    "publisher product team",
-    "audio journalism",
-    "news app product",
+# Trusted sources we mine for outbound links.
+# These are editorially aligned with the brief and have global scope.
+_LINK_SOURCES = [
+    "https://www.niemanlab.org/feed/",
+    "https://reutersinstitute.politics.ox.ac.uk/rss.xml",
+    "https://www.cjr.org/feed/",
+    "https://gijn.org/feed/",
+    "https://pressgazette.co.uk/feed/",
+    "https://www.inma.org/blogs/rss.cfm",
+    "https://ijnet.org/en/rss.xml",
 ]
 
-# Domains that will never be useful as RSS sources
+# Min citations from distinct trusted sources before we investigate a domain
+CITATION_THRESHOLD = 2
+
+# HN fallback search terms (only used if link extraction is sparse)
+_HN_TERMS = [
+    "newsroom AI journalism",
+    "news engineering product",
+    "digital journalism platform",
+    "media circumvention censorship",
+]
+
+MIN_LINK_CANDIDATES = 5  # below this, supplement with HN
+
+# Domains to always skip
 _SKIP_DOMAINS = {
     "github.com", "twitter.com", "x.com", "youtube.com", "linkedin.com",
     "facebook.com", "reddit.com", "wikipedia.org", "arxiv.org",
     "docs.google.com", "google.com", "apple.com", "microsoft.com",
-    "techcrunch.com", "theverge.com", "wired.com",  # too generic
+    "nytimes.com", "theguardian.com", "bbc.co.uk", "bbc.com",
+    "ft.com", "reuters.com", "washingtonpost.com",  # news sites, not eng blogs
 }
 
-# Common RSS feed path patterns to try
 _RSS_PATHS = [
     "/feed", "/rss", "/feed.xml", "/rss.xml", "/atom.xml",
     "/blog/feed", "/blog/rss", "/blog/feed.xml", "/blog/rss.xml",
@@ -85,31 +106,87 @@ def _known_domains(config: dict, auto: dict) -> set:
     return domains
 
 
+def _extract_linked_domains(known: set) -> dict:
+    """
+    Fetch recent articles from trusted sources and count how many distinct
+    trusted sources link to each unknown domain.
+    Returns {domain: count_of_distinct_linking_sources}.
+    """
+    domain_sources = {}  # domain -> set of source URLs that linked to it
+    headers = {"User-Agent": "WS-Research-Bot/1.0"}
+
+    for feed_url in _LINK_SOURCES:
+        try:
+            resp = requests.get(feed_url, timeout=10, headers=headers)
+            parsed = feedparser.parse(resp.content)
+            for entry in parsed.entries[:30]:
+                # Pull HTML from content or summary
+                content_list = entry.get("content", [])
+                html = content_list[0].get("value", "") if content_list else ""
+                if not html:
+                    html = entry.get("summary", "")
+
+                for href in re.findall(r'href=["\']([^"\']+)["\']', html):
+                    try:
+                        domain = urlparse(href).netloc.lower().lstrip("www.")
+                        if (domain and "." in domain
+                                and domain not in known
+                                and domain not in _SKIP_DOMAINS):
+                            if domain not in domain_sources:
+                                domain_sources[domain] = set()
+                            domain_sources[domain].add(feed_url)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"Link extraction failed for {feed_url}: {e}")
+        time.sleep(0.3)
+
+    return {d: len(sources) for d, sources in domain_sources.items()
+            if len(sources) >= CITATION_THRESHOLD}
+
+
+def _hn_candidates(known: set) -> dict:
+    """Fallback: search HN for relevant terms, return {domain: hit_count}."""
+    candidates = {}
+    for term in _HN_TERMS:
+        try:
+            resp = requests.get(
+                "https://hn.algolia.com/api/v1/search",
+                params={"query": term, "tags": "story", "hitsPerPage": 20},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                continue
+            for hit in resp.json().get("hits", []):
+                url = hit.get("url") or ""
+                domain = urlparse(url).netloc.lower().lstrip("www.")
+                if domain and domain not in known and domain not in _SKIP_DOMAINS and "." in domain:
+                    candidates[domain] = candidates.get(domain, 0) + 1
+        except Exception as e:
+            logger.warning(f"HN fallback search failed for '{term}': {e}")
+        time.sleep(0.5)
+    return candidates
+
+
 def _find_rss(domain: str) -> Optional[str]:
-    """Try to find an RSS feed for a domain via HTML autodiscovery then common paths."""
     base = f"https://{domain}"
     headers = {"User-Agent": "WS-Research-Bot/1.0"}
 
-    # HTML autodiscovery first — most reliable when it works
+    # HTML autodiscovery
     try:
         resp = requests.get(base, timeout=8, headers=headers)
         if resp.status_code == 200:
-            matches = re.findall(
+            for pattern in [
                 r'<link[^>]+type=["\']application/(?:rss|atom)\+xml["\'][^>]+href=["\']([^"\']+)["\']',
-                resp.text, re.IGNORECASE,
-            )
-            if not matches:
-                # Also try reversed attribute order
-                matches = re.findall(
-                    r'<link[^>]+href=["\']([^"\']+)["\'][^>]+type=["\']application/(?:rss|atom)\+xml["\']',
-                    resp.text, re.IGNORECASE,
-                )
-            if matches:
-                return urljoin(base, matches[0])
+                r'<link[^>]+href=["\']([^"\']+)["\'][^>]+type=["\']application/(?:rss|atom)\+xml["\']',
+            ]:
+                matches = re.findall(pattern, resp.text, re.IGNORECASE)
+                if matches:
+                    return urljoin(base, matches[0])
     except Exception:
         pass
 
-    # Fall back to common paths
+    # Common paths
     for path in _RSS_PATHS:
         url = base + path
         try:
@@ -124,7 +201,6 @@ def _find_rss(domain: str) -> Optional[str]:
 
 
 def _sample_titles(feed_url: str) -> list:
-    """Return up to 5 recent article titles from a feed."""
     try:
         resp = requests.get(feed_url, timeout=10, headers={"User-Agent": "WS-Research-Bot/1.0"})
         parsed = feedparser.parse(resp.content)
@@ -134,10 +210,9 @@ def _sample_titles(feed_url: str) -> list:
 
 
 def _is_relevant(domain: str, titles: list) -> bool:
-    """Ask Groq whether this source is worth monitoring."""
     from ai import _call_groq
     sample = "\n".join(f"- {t}" for t in titles) if titles else "(no sample available)"
-    prompt = f"""A BBC World Service product manager monitors sources about: digital news products, AI in journalism, news org engineering decisions, audio/podcast innovation, content format experiments.
+    prompt = f"""A BBC World Service product manager monitors sources about: digital news products, AI in journalism, news org engineering decisions, audio innovation, circumvention of internet censorship, and global media development — with particular interest in Africa, Asia, Latin America, and Europe.
 
 Should this source be added to their monitoring list?
 
@@ -145,7 +220,7 @@ Domain: {domain}
 Recent article titles:
 {sample}
 
-Reply YES or NO only. YES if this source regularly covers digital news products, journalism technology, AI in media, or engineering at news organisations. NO if it's a general news outlet, unrelated to media/journalism, or only covers business/finance."""
+Reply YES or NO only."""
     try:
         result = _call_groq(prompt).strip().upper()
         return result.startswith("YES")
@@ -154,52 +229,36 @@ Reply YES or NO only. YES if this source regularly covers digital news products,
 
 
 def run(config: dict) -> int:
-    """
-    Main discovery entry point. Returns number of new sources added.
-    """
     auto = _load_auto()
     known = _known_domains(config, auto)
     existing_urls = {f["url"] for f in auto.get("rss_feeds", [])}
 
-    # Search HN for candidate domains
-    candidates = {}
-    for term in _SEARCH_TERMS:
-        try:
-            resp = requests.get(
-                "https://hn.algolia.com/api/v1/search",
-                params={"query": term, "tags": "story", "hitsPerPage": 20},
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                continue
-            for hit in resp.json().get("hits", []):
-                url = hit.get("url") or ""
-                if not url:
-                    continue
-                domain = urlparse(url).netloc.lower().lstrip("www.")
-                if domain and domain not in known and domain not in _SKIP_DOMAINS and "." in domain:
-                    candidates[domain] = candidates.get(domain, 0) + 1
-        except Exception as e:
-            logger.warning(f"Discovery search failed for '{term}': {e}")
-        time.sleep(0.5)
+    # Primary: link extraction from trusted sources
+    logger.info("Discovery: extracting links from trusted sources...")
+    candidates = _extract_linked_domains(known)
+    logger.info(f"Discovery: {len(candidates)} domains cited {CITATION_THRESHOLD}+ times by trusted sources")
 
-    # Rank by how many times each domain appeared across search terms
+    # Fallback: HN search if we didn't find enough candidates
+    if len(candidates) < MIN_LINK_CANDIDATES:
+        logger.info("Discovery: supplementing with HN search...")
+        hn = _hn_candidates(known)
+        for domain, count in hn.items():
+            if domain not in candidates:
+                candidates[domain] = count
+
     ranked = sorted(candidates.items(), key=lambda x: x[1], reverse=True)[:20]
-    logger.info(f"Discovery: {len(ranked)} candidate domains to evaluate")
+    logger.info(f"Discovery: evaluating {len(ranked)} candidate domains")
 
     added = 0
-    for domain, hits in ranked:
+    for domain, score in ranked:
         if added >= MAX_NEW_PER_RUN:
             break
 
-        logger.info(f"Discovery: checking {domain} ({hits} HN mentions)")
+        logger.info(f"Discovery: checking {domain} (score {score})")
 
         feed_url = _find_rss(domain)
-        if not feed_url:
+        if not feed_url or feed_url in existing_urls:
             logger.info(f"Discovery: no RSS found for {domain}")
-            continue
-
-        if feed_url in existing_urls:
             continue
 
         titles = _sample_titles(feed_url)

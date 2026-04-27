@@ -108,6 +108,46 @@ rss_feeds:
     org: "The Pudding"
     tier: "engineering"
 
+  # Global / international journalism and media
+  - name: "GIJN (Global Investigative Journalism Network)"
+    url: "https://gijn.org/feed/"
+    org: "GIJN"
+    tier: "trade"
+  - name: "IJNet (International Journalists Network)"
+    url: "https://ijnet.org/en/rss.xml"
+    org: "IJNet"
+    tier: "trade"
+  - name: "Splice Media (Asia Pacific)"
+    url: "https://splicemedia.com/feed/"
+    org: "Splice Media"
+    tier: "trade"
+  - name: "SembraMedia (Latin America)"
+    url: "https://www.sembramedia.org/feed/"
+    org: "SembraMedia"
+    tier: "trade"
+  - name: "European Journalism Observatory"
+    url: "https://en.ejo.ch/feed"
+    org: "EJO"
+    tier: "research"
+  - name: "Knight Center for Journalism in the Americas"
+    url: "https://knightcenter.utexas.edu/blog/feed"
+    org: "Knight Center"
+    tier: "research"
+  - name: "Code for Africa"
+    url: "https://codeforafrica.org/feed/"
+    org: "Code for Africa"
+    tier: "trade"
+
+  # Circumvention / digital rights
+  - name: "Freedom of the Press Foundation"
+    url: "https://freedom.press/feed/"
+    org: "Freedom of the Press Foundation"
+    tier: "trade"
+  - name: "Access Now"
+    url: "https://www.accessnow.org/feed/"
+    org: "Access Now"
+    tier: "trade"
+
 # GitHub orgs — monitored for new repos and releases
 github_orgs:
   - name: "nytimes"
@@ -182,13 +222,12 @@ negative_keywords:
   - "award-winning"
   - "named in list"
   - "top 100"
-  # Field safety / physical journalism (not product/digital)
+  # Physical journalist safety (not product/digital — but NOT circumvention/censorship)
   - "war zone"
   - "flak jacket"
   - "journalist killed"
-  - "journalist arrested"
-  - "press freedom"
   - "reporter killed"
+  - "journalist shot"
 
 # Keywords for cheap pre-filter before calling Claude
 keywords:
@@ -220,6 +259,21 @@ keywords:
     - "ai-generated"
     - "chatgpt"
     - "openai"
+  circumvention:
+    - "circumvention"
+    - "censorship bypass"
+    - "internet block"
+    - "content block"
+    - "great firewall"
+    - "vpn"
+    - "mirror site"
+    - "anti-censorship"
+    - "digital repression"
+    - "secure drop"
+    - "signal app"
+    - "internet shutdown"
+    - "app store ban"
+    - "restricted market"
   product_engineering:
     - "product manager"
     - "product team"

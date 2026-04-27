@@ -26,6 +26,7 @@ CATEGORY_DESCRIPTIONS = {
     "audio": "podcasts, synthetic voice, text-to-speech, audio innovation, voice products",
     "ai_journalism": "how news organisations are using AI — tools, workflows, editorial automation, AI-assisted reporting, generative AI in the newsroom",
     "product_engineering": "new digital products or features at news orgs, new content formats and how they're performing, where journalism output meets product and engineering decisions, CMS, audience tools, platform strategy",
+    "circumvention": "how news organisations reach audiences in restricted or censored markets — anti-censorship tools, mirror sites, VPNs, secure distribution, working around government internet blocks or app store bans, digital repression countermeasures, secure communications for journalists and audiences in authoritarian contexts",
 }
 
 _INCLUDE = "\n".join(f"- {k}: {v}" for k, v in CATEGORY_DESCRIPTIONS.items())
@@ -85,6 +86,9 @@ Good examples to INCLUDE:
 - "Does short-form video help podcasts grow?" → yes, content formats
 - "Newsroom leaders struggle with AI adoption" → yes, AI in journalism
 - "Readly app hit with complaints after merger" → yes, digital product issue
+- "BBC Persian launches Telegram channel to bypass Iranian blocks" → yes, circumvention
+- "How RFE/RL reaches audiences behind the Great Firewall" → yes, circumvention
+- "Signal adds new feature for journalists in high-risk countries" → yes, circumvention
 
 EXCLUDE if the article is about:
 {_EXCLUDE}
@@ -141,7 +145,7 @@ def summarise_article(article: dict) -> dict:
 
     prompt = f"""You are writing a research digest for a BBC World Service product manager. Their team publishes a fortnightly email about product developments and AI in digital news media — the intersection of journalism and product/engineering.
 
-BBC World Service context: international news, 40+ language services, live news products, audio innovation including synthetic voice, AI in journalism.
+BBC World Service context: international news, 40+ language services across Africa, Asia, Latin America, Europe and the Middle East, live news products, audio innovation including synthetic voice, AI in journalism, and reaching audiences in restricted or censored markets.
 
 Article:
 Organisation: {article.get("org", "Unknown")}
