@@ -25,6 +25,8 @@ It monitors RSS feeds, GitHub orgs, and Hacker News for stories about how news o
 
 ## How it works
 
+**Weekly digest (every Monday 07:00 UTC):**
+
 1. **Fetch** — pulls articles from RSS feeds, GitHub org activity, and Hacker News discussions
 2. **Deduplicate** — skips anything already seen in a previous week's run (tracked in `seen.json`)
 3. **Negative keyword filter** — cheaply drops obvious noise (job cuts, obituaries, etc.) before any AI call
@@ -32,15 +34,30 @@ It monitors RSS feeds, GitHub orgs, and Hacker News for stories about how news o
 5. **AI summarise** — writes a 3–4 sentence summary and a BBC World Service relevance note for each article
 6. **Email** — builds an HTML email and sends it via Gmail
 
+**Monthly source discovery (1st of each month):**
+
+1. Searches HN for relevant stories from domains not already in the source list
+2. Checks each candidate domain for an RSS feed
+3. Asks Groq whether the source regularly covers digital news products or AI in journalism
+4. Saves validated sources to `auto_sources.yaml`, which is merged in automatically on every weekly run
+
+This means the source list grows over time without any manual intervention.
+
 ---
 
 ## Sources
 
-Configured in `config.yaml`:
+**Curated in `config.yaml`:**
 
-- **RSS feeds** — engineering blogs (NYT, Guardian, FT, BBC, Spotify) and trade publications (Nieman Lab, Press Gazette, Poynter, WNIP, INMA, Reuters Institute, Simon Owens)
+- **Engineering blogs** — NYT, Guardian, FT, BBC, Spotify, ProPublica, The Pudding
+- **Trade publications** — Nieman Lab, Press Gazette, Poynter, WNIP, INMA, Reuters Institute, Digiday, The Markup, Rest of World, CJR
+- **Newsletters** — Simon Owens, Hot Pod, The Fix, Media Voices, Podnews
 - **GitHub orgs** — NYT, Guardian, FT, BBC, Washington Post, Reuters, AP, Politico, Deutsche Welle
 - **Hacker News** — domain searches for engineering blog URLs
+
+**Auto-discovered in `auto_sources.yaml`:**
+
+Sources found by the monthly discovery job are stored here and merged in at runtime. This file is machine-managed — don't edit it manually.
 
 ---
 
@@ -96,15 +113,20 @@ python3 main.py --test && open digest_output.html
 
 # Production run — updates seen.json, sends email
 python3 main.py
+
+# Run source discovery manually
+python3 main.py --discover
 ```
 
 The test run writes `digest_output.html` and opens it in your browser. No email is sent unless `GMAIL_APP_PASSWORD` is set.
 
 ---
 
-## GitHub Actions (automated weekly run)
+## GitHub Actions (automated runs)
 
-The workflow in `.github/workflows/weekly-digest.yml` runs every Monday at 07:00 UTC.
+**Weekly digest** — `.github/workflows/weekly-digest.yml` — runs every Monday at 07:00 UTC.
+
+**Monthly discovery** — `.github/workflows/monthly-discovery.yml` — runs on the 1st of each month, finds new sources and commits `auto_sources.yaml`.
 
 **Required GitHub secrets** (Settings → Secrets and variables → Actions):
 
@@ -115,16 +137,16 @@ The workflow in `.github/workflows/weekly-digest.yml` runs every Monday at 07:00
 
 `GITHUB_TOKEN` is provided automatically by Actions — no setup needed.
 
-After each run, the workflow commits the updated `seen.json` back to the repo so the following week's run knows what's already been sent.
+After each weekly run, `seen.json` is committed back to the repo. After each discovery run, `auto_sources.yaml` is committed back.
 
 ---
 
 ## Customising sources and filters
 
-Everything is in `config.yaml`:
+**To add a source manually** — add an entry to the `rss_feeds` list in `config.yaml`. Set `tier: "engineering"` for dedicated engineering/product blogs (everything passes through) or `tier: "trade"` for general publications (keyword filtered first).
 
-- **`rss_feeds`** — add or remove feeds; set `tier: "engineering"` for high-signal blogs (no keyword filtering) or `tier: "trade"` for publications (keyword filtered)
-- **`negative_keywords`** — strings that immediately disqualify an article before the AI sees it
-- **`keywords`** — positive keyword categories used for pre-filtering trade feeds
+**To block a type of story** — add a phrase to `negative_keywords` in `config.yaml`. Any article whose title or summary contains that phrase is dropped before the AI sees it.
 
-The AI filter prompt is in `ai.py` — edit `_INCLUDE` and `_EXCLUDE` to adjust what the AI considers relevant.
+**To adjust what the AI considers relevant** — edit `_INCLUDE` and `_EXCLUDE` in `ai.py`.
+
+**To run source discovery immediately** — run `python3 main.py --discover` locally or trigger the monthly-discovery workflow manually in GitHub Actions. New sources are saved to `auto_sources.yaml` and picked up automatically.
