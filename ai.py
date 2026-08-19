@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama-3.1-8b-instant"
+MODEL = "openai/gpt-oss-20b"
 
 CATEGORY_DESCRIPTIONS = {
     "live_news": "live/rolling news products, live blogs, breaking news UX, real-time coverage tools",
