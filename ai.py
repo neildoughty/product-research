@@ -52,28 +52,35 @@ class FilterFailed(Exception):
 FILTER_ATTEMPTS = 3
 SUMMARY_ATTEMPTS = 2
 
+# The model must return one decision per article (include true/false), rather
+# than a list of "keepers". A keepers-only list lets the model stop early and
+# silently drop articles; a decision for every article can be checked.
 _FILTER_SCHEMA = {
     "type": "object",
     "properties": {
-        "articles": {
+        "decisions": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
                     "index": {"type": "integer"},
+                    "include": {"type": "boolean"},
                     "categories": {
                         "type": "array",
                         "items": {"type": "string", "enum": list(CATEGORY_DESCRIPTIONS)},
                     },
                 },
-                "required": ["index", "categories"],
+                "required": ["index", "include", "categories"],
                 "additionalProperties": False,
             },
         }
     },
-    "required": ["articles"],
+    "required": ["decisions"],
     "additionalProperties": False,
 }
+
+# If the model answers for fewer than this share of articles, retry.
+MIN_COVERAGE = 0.9
 
 _SUMMARY_SCHEMA = {
     "type": "object",
@@ -181,21 +188,22 @@ Bad examples to EXCLUDE:
 Articles:
 {article_list}
 
-Return a JSON object listing the articles worth including, by their number above. When in doubt, include it — the reader can skim.
-Format: {{"articles": [{{"index": 1, "categories": ["product_engineering"]}}]}}
+Give a decision for EVERY article above, in order — one entry per article number, {len(articles)} entries in total.
+Set "include" to true if it is worth including. When in doubt, include it — the reader can skim.
+For included articles, list one or more categories. For excluded articles, use an empty list.
+Format: {{"decisions": [{{"index": 1, "include": true, "categories": ["product_engineering"]}}, {{"index": 2, "include": false, "categories": []}}]}}
 Allowed categories: {", ".join(CATEGORY_DESCRIPTIONS)}
-If nothing qualifies, return: {{"articles": []}}
 Return JSON only, no explanation."""
 
     last_error = None
     for attempt in range(1, FILTER_ATTEMPTS + 1):
         try:
             data = _parse_json(_call_groq(prompt, _FILTER_SCHEMA, "article_filter"))
-            results = data.get("articles") if isinstance(data, dict) else None
+            results = data.get("decisions") if isinstance(data, dict) else None
             if not isinstance(results, list):
-                raise ValueError("response has no 'articles' list")
+                raise ValueError("response has no 'decisions' list")
 
-            relevant, used = [], set()
+            decisions = {}
             for r in results:
                 if not isinstance(r, dict):
                     continue
@@ -203,14 +211,36 @@ Return JSON only, no explanation."""
                     idx = int(r.get("index", 0)) - 1
                 except (TypeError, ValueError):
                     continue
-                if not (0 <= idx < len(articles)) or idx in used:
-                    continue
-                used.add(idx)
-                cats = [c for c in (r.get("categories") or []) if c in CATEGORY_DESCRIPTIONS]
-                articles[idx]["categories"] = cats
-                relevant.append(articles[idx])
+                if 0 <= idx < len(articles) and idx not in decisions:
+                    decisions[idx] = r
+
+            coverage = len(decisions) / len(articles)
+            if coverage < MIN_COVERAGE:
+                raise ValueError(
+                    f"model only answered for {len(decisions)}/{len(articles)} articles"
+                )
+
+            relevant = []
+            for idx, article in enumerate(articles):
+                r = decisions.get(idx)
+                if r is None:
+                    # No answer for this one: follow "when in doubt, include"
+                    include, cats, mark = True, [], "KEEP?"
+                else:
+                    include = bool(r.get("include"))
+                    cats = [c for c in (r.get("categories") or []) if c in CATEGORY_DESCRIPTIONS]
+                    mark = "KEEP " if include else "drop "
+                logger.info(f"  {mark} [{article.get('org', '')}] {article.get('title', '')[:90]}")
+                if include:
+                    article["categories"] = cats
+                    relevant.append(article)
 
             logger.info(f"AI filter: {len(relevant)}/{len(articles)} articles kept (attempt {attempt})")
+            if len(articles) >= 10 and len(relevant) <= len(articles) // 10:
+                logger.warning(
+                    "AI filter kept very few articles — check the KEEP/drop list above "
+                    "to see if the filter is being too strict"
+                )
             return relevant
         except Exception as e:
             last_error = e
