@@ -15,7 +15,12 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-LOOKBACK_DAYS = 7
+# How far back to look. 7 matches the weekly schedule; a manual run can
+# override it (e.g. LOOKBACK_DAYS=10) to recover articles from a failed run.
+try:
+    LOOKBACK_DAYS = max(1, int(os.environ.get("LOOKBACK_DAYS") or 7))
+except ValueError:
+    LOOKBACK_DAYS = 7
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 # Keywords that suggest a story is about product/technology, not general news.
@@ -192,6 +197,10 @@ def fetch_hn_items(domains: list) -> list:
     """
     Search Hacker News (via Algolia API) for recent stories linked to these domains.
     Surfaces engineer/PM discussion threads that don't appear in RSS feeds.
+
+    Note: Algolia has no "site:" operator — a query of "site:example.com" is
+    treated as plain words and finds almost nothing. Instead we search the
+    story URL field for the domain and then double-check each hit's URL.
     """
     cutoff_ts = int(
         (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=LOOKBACK_DAYS)).timestamp()
@@ -201,30 +210,38 @@ def fetch_hn_items(domains: list) -> list:
     for domain in domains:
         try:
             resp = requests.get(
-                "https://hn.algolia.com/api/v1/search",
+                "https://hn.algolia.com/api/v1/search_by_date",
                 params={
-                    "query": f"site:{domain}",
+                    "query": domain,
+                    "restrictSearchableAttributes": "url",
                     "tags": "story",
                     "numericFilters": f"created_at_i>{cutoff_ts}",
-                    "hitsPerPage": 5,
+                    "hitsPerPage": 10,
                 },
                 timeout=10,
             )
-            if resp.status_code == 200:
-                for hit in resp.json().get("hits", []):
-                    url = hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
-                    points = hit.get("points", 0)
-                    comments = hit.get("num_comments", 0)
-                    items.append({
-                        "source": "hn",
-                        "org": domain,
-                        "feed_name": "Hacker News",
-                        "tier": "hn",
-                        "title": hit.get("title", ""),
-                        "url": url,
-                        "summary": f"{points} points · {comments} comments on Hacker News",
-                        "published": "",
-                    })
+            if resp.status_code != 200:
+                logger.warning(f"HN search for {domain} returned HTTP {resp.status_code}")
+                continue
+            kept = 0
+            for hit in resp.json().get("hits", []):
+                story_url = hit.get("url") or ""
+                if domain.lower() not in story_url.lower():
+                    continue  # fuzzy match on a different site
+                points = hit.get("points", 0)
+                comments = hit.get("num_comments", 0)
+                items.append({
+                    "source": "hn",
+                    "org": domain,
+                    "feed_name": "Hacker News",
+                    "tier": "hn",
+                    "title": hit.get("title", ""),
+                    "url": story_url,
+                    "summary": f"{points} points · {comments} comments on Hacker News",
+                    "published": hit.get("created_at", ""),
+                })
+                kept += 1
+            logger.info(f"HN: {domain} → {kept} stories")
         except Exception as e:
             logger.warning(f"HN search failed for {domain}: {e}")
 

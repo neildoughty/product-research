@@ -1,9 +1,8 @@
 """
-Build HTML email digest and send via Resend.
+Build HTML email digest and send via Gmail SMTP (GMAIL_APP_PASSWORD).
 
-From address: uses onboarding@resend.dev (Resend's shared sender).
-This works for sending to your own verified Resend account email without
-needing a custom domain. To send to any address, verify a domain at resend.com/domains.
+build_and_send() returns True only if the email was actually sent, so the
+caller knows whether it is safe to mark articles as seen.
 """
 
 import datetime
@@ -20,17 +19,29 @@ SECTIONS = [
     ("audio",              "🎙️ Audio & Synthetic Voice"),
     ("ai_journalism",      "🤖 AI in Journalism"),
     ("product_engineering","⚙️ Product & Engineering"),
+    ("circumvention",      "🛡️ Circumvention & Restricted Markets"),
 ]
 
 
-def build_and_send(articles: list, github_items: list, config: dict):
-    html = _build_html(articles, github_items)
-    _send(html, config)
+def build_and_send(articles: list, github_items: list, config: dict,
+                   notices: list = None, unfiltered: bool = False) -> bool:
+    """
+    notices: plain-English warning lines shown in a banner at the top.
+    unfiltered: True if the AI filter failed and articles were not screened.
+    Returns True if the email was sent.
+    """
+    html = _build_html(articles, github_items, notices or [], unfiltered)
+    subject_flags = []
+    if unfiltered:
+        subject_flags.append("UNFILTERED")
+    if not articles:
+        subject_flags.append("0 articles")
+    return _send(html, config, subject_flags)
 
 
 # ── HTML builder ─────────────────────────────────────────────────────────────
 
-def _build_html(articles: list, github_items: list) -> str:
+def _build_html(articles: list, github_items: list, notices: list = None, unfiltered: bool = False) -> str:
     week = datetime.date.today().strftime("%-d %B %Y")
 
     # Group articles by primary category (first matching in SECTIONS order)
@@ -76,6 +87,8 @@ def _build_html(articles: list, github_items: list) -> str:
   .github-item a {{ color: #1a1a1a; }}
   .github-org {{ color: #888; }}
   .github-desc {{ color: #666; font-size: 0.85em; }}
+  .notice {{ background: #fdecea; border-left: 4px solid #b00; padding: 10px 12px; margin-bottom: 24px; font-family: Arial, sans-serif; font-size: 0.9em; color: #611a15; }}
+  .notice p {{ margin: 4px 0; }}
   .footer {{ margin-top: 40px; padding-top: 16px; border-top: 1px solid #eee; font-size: 0.78em; color: #aaa; font-family: Arial, sans-serif; }}
 </style>
 </head>
@@ -84,14 +97,27 @@ def _build_html(articles: list, github_items: list) -> str:
 <div class="meta">Week of {week} &bull; {total_articles} articles &bull; {total_github} GitHub updates</div>
 """
 
+    if notices:
+        html += '<div class="notice">\n'
+        for n in notices:
+            html += f"  <p>⚠️ {_esc(n)}</p>\n"
+        html += "</div>\n"
+
     # Article sections
-    for key, label in SECTIONS:
-        items = buckets.get(key, [])
-        if not items:
-            continue
-        html += f"<h2>{label}</h2>\n"
-        for a in items:
-            html += _render_article(a)
+    if unfiltered:
+        # AI filter failed: no categories, so show everything in one list
+        if articles:
+            html += "<h2>📋 Unfiltered — not screened by the AI filter</h2>\n"
+            for a in articles:
+                html += _render_article(a)
+    else:
+        for key, label in SECTIONS:
+            items = buckets.get(key, [])
+            if not items:
+                continue
+            html += f"<h2>{label}</h2>\n"
+            for a in items:
+                html += _render_article(a)
 
     # GitHub section
     if github_items:
@@ -153,24 +179,25 @@ def _esc(s: str) -> str:
 
 # ── email sender ─────────────────────────────────────────────────────────────
 
-def _send(html: str, config: dict):
+def _send(html: str, config: dict, subject_flags: list = None) -> bool:
     app_password = os.environ.get("GMAIL_APP_PASSWORD")
     if not app_password:
-        logger.warning("GMAIL_APP_PASSWORD not set — writing digest to digest_output.html")
+        logger.warning("GMAIL_APP_PASSWORD not set — writing digest to digest_output.html (not sent)")
         with open("digest_output.html", "w") as f:
             f.write(html)
-        return
+        return False
 
     from_addr = config.get("digest_from", "neil.doughty@gmail.com")
     to_addr = config.get("digest_to", from_addr)
     if not to_addr:
         logger.error("digest_to not configured in config.yaml")
-        return
+        return False
 
     week = datetime.date.today().strftime("%-d %B %Y")
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"BBC World Service Research Digest — {week}"
+    prefix = "".join(f"[{f}] " for f in (subject_flags or []))
+    msg["Subject"] = f"{prefix}BBC World Service Research Digest — {week}"
     msg["From"] = f"WS Research Digest <{from_addr}>"
     msg["To"] = to_addr
     msg.attach(MIMEText(html, "html"))
@@ -180,8 +207,10 @@ def _send(html: str, config: dict):
             server.login(from_addr, app_password)
             server.sendmail(from_addr, to_addr, msg.as_string())
         logger.info(f"Email sent to {to_addr}")
+        return True
     except Exception as e:
         logger.error(f"Gmail send failed: {e}")
         with open("digest_output.html", "w") as f:
             f.write(html)
         logger.info("Digest saved to digest_output.html as fallback")
+        return False

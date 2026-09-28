@@ -51,7 +51,7 @@ This means the source list grows over time without any manual intervention.
 
 - **Engineering blogs** — NYT, Guardian, FT, BBC, Spotify, ProPublica, The Pudding
 - **Trade publications** — Nieman Lab, Press Gazette, Poynter, WNIP, INMA, Reuters Institute, Digiday, The Markup, Rest of World, CJR
-- **Newsletters** — Simon Owens, Hot Pod, The Fix, Media Voices, Podnews
+- **Newsletters** — Simon Owens, Hot Pod, The Fix, Podnews
 - **GitHub orgs** — NYT, Guardian, FT, BBC, Washington Post, Reuters, AP, Politico, Deutsche Welle
 - **Hacker News** — domain searches for engineering blog URLs
 

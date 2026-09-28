@@ -45,23 +45,102 @@ _EXCLUDE = (
 )
 
 
-def _call_groq(prompt: str) -> str:
+class FilterFailed(Exception):
+    """Raised when the AI filter could not produce a usable answer after retries."""
+
+
+FILTER_ATTEMPTS = 3
+SUMMARY_ATTEMPTS = 2
+
+_FILTER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "articles": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "categories": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": list(CATEGORY_DESCRIPTIONS)},
+                    },
+                },
+                "required": ["index", "categories"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["articles"],
+    "additionalProperties": False,
+}
+
+_SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "relevance_note": {"type": "string"},
+    },
+    "required": ["summary", "relevance_note"],
+    "additionalProperties": False,
+}
+
+
+def _call_groq(prompt: str, schema: dict = None, schema_name: str = "result") -> str:
+    """
+    Call Groq. When a schema is given, use strict Structured Outputs so the
+    model is forced to return JSON matching that schema.
+    """
     if not GROQ_API_KEY:
         raise ValueError("GROQ_API_KEY not set")
+    body = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+    }
+    if schema:
+        body["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": schema_name, "strict": True, "schema": schema},
+        }
     resp = requests.post(
         GROQ_URL,
         headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1},
-        timeout=30,
+        json=body,
+        timeout=60,
     )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    if resp.status_code >= 400:
+        # Log Groq's error message (never the request headers / key)
+        raise RuntimeError(f"Groq HTTP {resp.status_code}: {resp.text[:300]}")
+    return resp.json()["choices"][0]["message"]["content"] or ""
+
+
+def _parse_json(text: str):
+    """
+    Belt-and-braces JSON parsing: strip markdown fences, then parse the
+    outermost {...} object. Raises ValueError/JSONDecodeError if it can't.
+    """
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = text.split("```", 2)[1]
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start < 0 or end <= start:
+        raise ValueError("no JSON object found in model response")
+    return json.loads(text[start:end])
 
 
 def filter_articles(articles: list) -> list:
     """
     Send all candidate articles to Groq in a single call.
     Returns only those about product/technology developments, with categories set.
+
+    Raises FilterFailed if no valid answer is obtained after FILTER_ATTEMPTS
+    tries. It never silently returns [] on failure — an empty list means the
+    AI genuinely judged nothing relevant.
     """
     if not articles:
         return []
@@ -102,42 +181,50 @@ Bad examples to EXCLUDE:
 Articles:
 {article_list}
 
-Return a JSON array of the articles worth including. When in doubt, include it — the reader can skim.
-Format: [{{"index": 1, "categories": ["product_engineering"]}}]
-If nothing qualifies, return: []
+Return a JSON object listing the articles worth including, by their number above. When in doubt, include it — the reader can skim.
+Format: {{"articles": [{{"index": 1, "categories": ["product_engineering"]}}]}}
+Allowed categories: {", ".join(CATEGORY_DESCRIPTIONS)}
+If nothing qualifies, return: {{"articles": []}}
 Return JSON only, no explanation."""
 
-    try:
-        text = _call_groq(prompt).strip()
-        # Strip markdown fences if the model adds them
-        if text.startswith("```"):
-            text = text.split("```", 2)[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-        start = text.find("[")
-        end = text.rfind("]") + 1
-        if start >= 0 and end > start:
-            results = json.loads(text[start:end])
-            relevant = []
-            for r in results:
-                idx = r.get("index", 0) - 1
-                if 0 <= idx < len(articles):
-                    articles[idx]["categories"] = r.get("categories", [])
-                    relevant.append(articles[idx])
-            logger.info(f"AI filter: {len(relevant)}/{len(articles)} articles kept")
-            return relevant
-    except json.JSONDecodeError as e:
-        logger.warning(f"Filter JSON parse error: {e}")
-    except Exception as e:
-        logger.warning(f"Filter API call failed: {e}")
+    last_error = None
+    for attempt in range(1, FILTER_ATTEMPTS + 1):
+        try:
+            data = _parse_json(_call_groq(prompt, _FILTER_SCHEMA, "article_filter"))
+            results = data.get("articles") if isinstance(data, dict) else None
+            if not isinstance(results, list):
+                raise ValueError("response has no 'articles' list")
 
-    return []
+            relevant, used = [], set()
+            for r in results:
+                if not isinstance(r, dict):
+                    continue
+                try:
+                    idx = int(r.get("index", 0)) - 1
+                except (TypeError, ValueError):
+                    continue
+                if not (0 <= idx < len(articles)) or idx in used:
+                    continue
+                used.add(idx)
+                cats = [c for c in (r.get("categories") or []) if c in CATEGORY_DESCRIPTIONS]
+                articles[idx]["categories"] = cats
+                relevant.append(articles[idx])
+
+            logger.info(f"AI filter: {len(relevant)}/{len(articles)} articles kept (attempt {attempt})")
+            return relevant
+        except Exception as e:
+            last_error = e
+            logger.warning(f"AI filter attempt {attempt}/{FILTER_ATTEMPTS} failed: {e}")
+            if attempt < FILTER_ATTEMPTS:
+                time.sleep(5 * attempt)
+
+    raise FilterFailed(f"AI filter failed after {FILTER_ATTEMPTS} attempts: {last_error}")
 
 
 def summarise_article(article: dict) -> dict:
     """
     Write a focused summary and BBC World Service relevance note for one article.
+    Falls back to the feed's own snippet if the AI call fails.
     """
     categories = article.get("categories", [])
     cat_labels = [CATEGORY_DESCRIPTIONS.get(c, c) for c in categories]
@@ -160,25 +247,21 @@ Write:
 Return JSON only, no explanation, no markdown fences:
 {{"summary": "...", "relevance_note": "..."}}"""
 
-    try:
-        text = _call_groq(prompt).strip()
-        if text.startswith("```"):
-            text = text.split("```", 2)[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            result = json.loads(text[start:end])
+    for attempt in range(1, SUMMARY_ATTEMPTS + 1):
+        try:
+            result = _parse_json(_call_groq(prompt, _SUMMARY_SCHEMA, "article_summary"))
+            if not isinstance(result, dict) or not result.get("summary"):
+                raise ValueError("response missing 'summary'")
             return {
-                "summary": result.get("summary", ""),
-                "relevance_note": result.get("relevance_note", ""),
+                "summary": str(result.get("summary", "")),
+                "relevance_note": str(result.get("relevance_note", "")),
             }
-    except json.JSONDecodeError as e:
-        logger.warning(f"Summarise JSON parse error for '{article.get('title', '')}': {e}")
-    except Exception as e:
-        logger.warning(f"Summarise API call failed for '{article.get('title', '')}': {e}")
+        except Exception as e:
+            logger.warning(
+                f"Summarise attempt {attempt}/{SUMMARY_ATTEMPTS} failed for '{article.get('title', '')}': {e}"
+            )
+            if attempt < SUMMARY_ATTEMPTS:
+                time.sleep(3)
 
     return {
         "summary": article.get("summary", "")[:400],

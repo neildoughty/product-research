@@ -71,10 +71,6 @@ rss_feeds:
     url: "https://thefix.media/feed"
     org: "The Fix"
     tier: "newsletter"
-  - name: "Media Voices"
-    url: "https://mediavoices.co.uk/feed/"
-    org: "Media Voices"
-    tier: "newsletter"
 
   # Additional trade publications
   - name: "Digiday"

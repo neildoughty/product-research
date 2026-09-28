@@ -5,6 +5,11 @@ on:
     # 07:00 UTC every Monday = 07:00 London (winter/GMT) / 08:00 London (summer/BST)
     - cron: '0 7 * * 1'
   workflow_dispatch: # manual trigger for testing
+    inputs:
+      lookback_days:
+        description: 'How many days back to look for articles (normally 7; use more to recover a failed run)'
+        required: false
+        default: '7'
 
 permissions:
   contents: write
@@ -31,9 +36,14 @@ jobs:
           GROQ_API_KEY: ${{ secrets.groqsecret }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOOKBACK_DAYS: ${{ inputs.lookback_days || '7' }}
         run: python main.py
 
+      # Runs even if the digest step exited with an error, so that an
+      # UNFILTERED digest that was actually sent still gets recorded as seen.
+      # (If nothing was sent, main.py leaves seen.json untouched, so there's nothing to commit.)
       - name: Commit updated seen.json
+        if: always()
         run: |
           git config user.name "ws-research[bot]"
           git config user.email "ws-research[bot]@users.noreply.github.com"
