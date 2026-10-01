@@ -1,3 +1,7 @@
 # Auto-discovered RSS sources
 # Managed by discovery.py — do not edit manually
-rss_feeds: []
+rss_feeds:
+- name: cnn.com
+  url: https://cnn.com/index.xml
+  org: cnn.com
+  tier: trade
