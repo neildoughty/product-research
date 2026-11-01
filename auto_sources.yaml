@@ -5,3 +5,7 @@ rss_feeds:
   url: https://cnn.com/index.xml
   org: cnn.com
   tier: trade
+- name: nrk.no
+  url: https://www.nrk.no/toppsaker.rss
+  org: nrk.no
+  tier: trade
